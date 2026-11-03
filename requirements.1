@@ -7,6 +7,8 @@ slowapi==0.1.10 # Do limitowania zapytań (10 wiadomości / minutę)
 pytest==9.2.0
 pytest-asyncio==1.4.1.post1
 pytest-mock==3.17.0     # Fixture "mocker" w test_main.py
+httpx==0.28.1           # Klient testowy endpointów FastAPI
+aiosqlite==0.22.1       # Baza w pamięci w testach (bez Dockera)
 sqlalchemy[asyncio]==2.1.6  # [asyncio] doinstalowuje greenlet, bez niego backend nie wstaje
 asyncpg==0.32.0
 streamlit==1.66.1       # Frontend

@@ -3,6 +3,7 @@ import json
 import os
 import google.generativeai as genai
 from dotenv import load_dotenv
+from pydantic import ValidationError
 from schemas import LLMResponse
 
 # Klucz API wczytywany z pliku .env (GOOGLE_API_KEY=...) lub ze zmiennej środowiskowej
@@ -15,6 +16,18 @@ models = [
     genai.GenerativeModel(name, generation_config={"response_mime_type": "application/json"})
     for name in MODEL_NAMES
 ]
+
+def parse_llm_response(text: str) -> LLMResponse:
+    """Odczytuje odpowiedź LLM (JSON) do struktury bot_response + errors."""
+    # Oczyszczenie odpowiedzi z markdowna (częsty problem w LLM)
+    raw_json = text.replace("```json", "").replace("```", "").strip()
+    try:
+        data = json.loads(raw_json)
+        return LLMResponse(**data)
+    except (json.JSONDecodeError, TypeError, ValidationError):
+        # Zabezpieczenie: Odpowiedź nie jest poprawnym JSON-em[cite: 1]
+        # Zwraca samą odpowiedź tekstową bez analizy błędów[cite: 1]
+        return LLMResponse(bot_response=text, errors=[])
 
 async def generate_bot_response(user_content: str, history: list, lang: str, native_lang: str, level: str) -> LLMResponse:
     # Prompt Systemowy[cite: 1]
@@ -37,27 +50,18 @@ async def generate_bot_response(user_content: str, history: list, lang: str, nat
     for attempt in range(4):
         try:
             # Przerywanie zapytania w przypadku braku odpowiedzi w ciągu 30s[cite: 1]
-            # retry=None – bez wewnętrznych ponowień biblioteki, ponawiamy sami (z innym modelem)
+            # retry=None – bez wewnętrznych ponowień biblioteki, ponawiamy sami (z innym modelem);
+            # timeout biblioteki dłuższy niż 30 s, żeby to wait_for decydował o przerwaniu
             model = models[attempt % len(models)]
             response = await asyncio.wait_for(
-                asyncio.to_thread(model.generate_content, prompt, request_options={"retry": None, "timeout": 30}),
+                asyncio.to_thread(model.generate_content, prompt, request_options={"retry": None, "timeout": 35}),
                 timeout=30.0
             )
-            
-            # Próba parsowania JSON
-            try:
-                # Oczyszczenie odpowiedzi z markdowna (częsty problem w LLM)
-                raw_json = response.text.replace("```json", "").replace("```", "").strip()
-                data = json.loads(raw_json)
-                return LLMResponse(**data)
-            except (json.JSONDecodeError, TypeError):
-                # Zabezpieczenie: Odpowiedź nie jest poprawnym JSON-em[cite: 1]
-                # Zwraca samą odpowiedź tekstową bez analizy błędów[cite: 1]
-                return LLMResponse(bot_response=response.text, errors=[])
-                
+            return parse_llm_response(response.text)
+
         except asyncio.TimeoutError:
-            if attempt == 3:
-                raise Exception("Brak odpowiedzi z serwera w ciągu 30 s.") #[cite: 1]
+            # Brak odpowiedzi w 30 s – przerywamy od razu, bez ponawiania[cite: 1]
+            raise Exception("Brak odpowiedzi z serwera w ciągu 30 s.")
         except Exception as e:
             # Sytuacja: Przekroczony limit zapytań (429) lub niedostępność (503)[cite: 1]
             if attempt == 3:

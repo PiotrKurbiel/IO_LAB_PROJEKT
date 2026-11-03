@@ -1,5 +1,9 @@
 import re
 
+def count_words(text: str) -> int:
+    """Liczy słowa w wiadomości (word_count)."""
+    return len(text.split())
+
 def calculate_wpm(word_count: int, last_message_timestamp: float, current_timestamp: float) -> float:
     """Oblicza czas pisania wyrażony w słowach na minutę (WPM)."""
     time_diff_minutes = (current_timestamp - last_message_timestamp) / 60.0

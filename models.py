@@ -1,6 +1,6 @@
 import hashlib
 import os
-from sqlalchemy import Column, Integer, String, Text, Float, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Text, Float, ForeignKey, DateTime, JSON
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
@@ -70,7 +70,8 @@ class Report(Base):
     wpm = Column(Float, nullable=False)
     unique_words_count = Column(Integer, nullable=False)
     total_errors = Column(Integer, nullable=False)
-    errors_details = Column(JSONB, nullable=False)
+    # JSONB w PostgreSQL; zwykły JSON w bazie testowej (SQLite)
+    errors_details = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
 
     # Relacja
     session = relationship("Session", back_populates="reports")

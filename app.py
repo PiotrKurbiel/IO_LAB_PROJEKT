@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from stats_service import calculate_error_percentage, count_sentences
+from stats_service import calculate_error_percentage, count_sentences, count_words
 
 # ───────────────────────────────────────────
 # Konfiguracja
@@ -83,7 +83,7 @@ def api_send_message(session_id: int, content: str, language: str, level: str, n
             "language": language,
             "level": level,
             "native_language": native_language
-        }, timeout=35)
+        }, timeout=45)  # dłużej niż backend (ponowienia 1+2+4 s + limit 30 s), żeby dostać jego komunikat
         return r
     except requests.exceptions.RequestException:  # też ReadTimeout, gdy LLM nie odpowie w 35 s
         return None
@@ -110,6 +110,9 @@ def init_state():
         },
         "show_register": False,
         "api_error": None,
+        "pending_message": None, # wiadomość czekająca na odpowiedź bota (pole wpisywania zablokowane)
+        "failed_message": None,  # niewysłana wiadomość – do ponownego wysłania
+        "send_error": None,      # (poziom, treść) komunikatu o błędzie wysyłania
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -187,6 +190,8 @@ def render_login():
 
 def render_app():
     user = st.session_state.user
+    # Do czasu odpowiedzi bota wszystkie kontrolki są zablokowane – kliknięcie przerwałoby wysyłanie
+    waiting = st.session_state.pending_message is not None
 
     # ── Panel boczny ──────────────────────────────────────────────────────────
     with st.sidebar:
@@ -195,11 +200,11 @@ def render_app():
         st.divider()
 
         st.subheader("⚙️ Ustawienia sesji")
-        lang_label = st.selectbox("Język nauki", options=list(LANGUAGES.keys()))
+        lang_label = st.selectbox("Język nauki", options=list(LANGUAGES.keys()), disabled=waiting)
         selected_lang = LANGUAGES[lang_label]
-        selected_level = st.selectbox("Poziom zaawansowania", options=LEVELS, index=LEVELS.index("B1"))
+        selected_level = st.selectbox("Poziom zaawansowania", options=LEVELS, index=LEVELS.index("B1"), disabled=waiting)
 
-        if st.button("▶ Nowa rozmowa", use_container_width=True):
+        if st.button("▶ Nowa rozmowa", use_container_width=True, disabled=waiting):
             _start_new_session(user["user_id"], selected_lang, selected_level)
 
         st.divider()
@@ -210,13 +215,13 @@ def render_app():
         if sessions:
             for s in sessions:
                 label = f"#{s['session_id']}  {s['language']} · {s['level']}"
-                if st.button(label, key=f"sess_{s['session_id']}", use_container_width=True):
+                if st.button(label, key=f"sess_{s['session_id']}", use_container_width=True, disabled=waiting):
                     _load_session(s["session_id"], s["language"], s["level"])
         else:
             st.caption("Brak poprzednich rozmów.")
 
         st.divider()
-        if st.button("🚪 Wyloguj", use_container_width=True):
+        if st.button("🚪 Wyloguj", use_container_width=True, disabled=waiting):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
@@ -240,14 +245,24 @@ def render_app():
                 with st.chat_message(msg["sender"] if msg["sender"] == "user" else "assistant"):
                     st.markdown(msg["content"])
 
-        # Pole wpisywania
-        user_input = st.chat_input("Wpisz wiadomość…")
+        # Pole wpisywania – zablokowane, dopóki bot nie odpowie
+        user_input = st.chat_input("Wpisz wiadomość…", disabled=waiting)
         if user_input:
-            _handle_send(user_input)
+            _queue_message(user_input)
+        status_slot = st.empty()  # miejsce na „Bot pisze…”
+
+        # Błąd wysyłania – tekst nie znika, można go wysłać ponownie
+        if st.session_state.send_error:
+            level, text = st.session_state.send_error
+            (st.warning if level == "warning" else st.error)(text)
+        if st.session_state.failed_message and not waiting:
+            st.info(f"Niewysłana wiadomość: {st.session_state.failed_message}")
+            if st.button("🔁 Wyślij ponownie", use_container_width=True):
+                _queue_message(st.session_state.failed_message)
 
         # Przycisk RESET
         st.divider()
-        if st.button("🔄 RESET — nowa rozmowa w tym samym języku", use_container_width=True):
+        if st.button("🔄 RESET — nowa rozmowa w tym samym języku", use_container_width=True, disabled=waiting):
             _start_new_session(
                 user["user_id"],
                 st.session_state.language_code,
@@ -282,6 +297,11 @@ def render_app():
         )
         c4.metric("❌ % błędów / zdanie", f"{error_pct:.1f}%")
 
+    # Wysłanie oczekującej wiadomości – dopiero gdy cały ekran jest narysowany z zablokowanymi kontrolkami
+    if waiting:
+        with status_slot:
+            _handle_send(st.session_state.pending_message)
+
 
 # ───────────────────────────────────────────
 # Akcje pomocnicze
@@ -303,7 +323,15 @@ def _start_new_session(user_id: int, language: str, level: str):
         "wpm": 0.0, "unique_words_count": 0,
         "total_errors": 0, "total_words": 0, "sentence_count": 0
     }
+    _clear_send_state()
     st.rerun()
+
+
+def _clear_send_state():
+    """Czyści oczekującą/niewysłaną wiadomość i komunikat o błędzie (np. przy zmianie rozmowy)."""
+    st.session_state.pending_message = None
+    st.session_state.failed_message = None
+    st.session_state.send_error = None
 
 
 def _load_session(session_id: int, language: str, level: str):
@@ -326,17 +354,33 @@ def _load_session(session_id: int, language: str, level: str):
         "wpm": saved["wpm"],
         "unique_words_count": saved["unique_words_count"],
         "total_errors": saved["total_errors"],
-        "total_words": sum(len(m.split()) for m in user_msgs),
+        "total_words": sum(count_words(m) for m in user_msgs),
         "sentence_count": sum(count_sentences(m) for m in user_msgs),
     }
+    _clear_send_state()
+    st.rerun()
+
+
+def _queue_message(content: str):
+    """Pokazuje wiadomość w czacie i blokuje pole wpisywania do czasu odpowiedzi bota."""
+    # Optymistyczne dodanie wiadomości użytkownika do czatu
+    st.session_state.messages.append({"sender": "user", "content": content})
+    _clear_send_state()
+    st.session_state.pending_message = content
+    st.rerun()
+
+
+def _send_failed(level: str, text: str):
+    """Cofa wiadomość z czatu (nic nie trafiło do bazy), ale zachowuje jej treść do ponownego wysłania."""
+    st.session_state.messages.pop()
+    st.session_state.failed_message = st.session_state.pending_message
+    st.session_state.pending_message = None
+    st.session_state.send_error = (level, text)
     st.rerun()
 
 
 def _handle_send(content: str):
     """Wysyła wiadomość do backendu i aktualizuje stan."""
-    # Optymistyczne dodanie wiadomości użytkownika do czatu
-    st.session_state.messages.append({"sender": "user", "content": content})
-
     user = st.session_state.user
     with st.spinner("Bot pisze…"):
         resp = api_send_message(
@@ -348,25 +392,20 @@ def _handle_send(content: str):
         )
 
     if resp is None:
-        st.error("Brak połączenia z serwerem. Spróbuj ponownie.")
-        st.session_state.messages.pop()  # Cofnij optymistyczne dodanie
-        return
+        return _send_failed("error", "Brak połączenia z serwerem. Spróbuj ponownie.")
 
     if resp.status_code == 429:
-        st.warning("Przekroczono limit 10 wiadomości na minutę. Poczekaj chwilę.")
-        st.session_state.messages.pop()
-        return
+        return _send_failed("warning", "Przekroczono limit 10 wiadomości na minutę. Poczekaj chwilę.")
 
     if resp.status_code != 200:
         detail = resp.json().get("detail", "Błąd serwera.")
-        st.error(f"Błąd: {detail}")
-        st.session_state.messages.pop()
-        return
+        return _send_failed("error", f"Błąd: {detail}")
 
     data = resp.json()
 
-    # Dodaj odpowiedź bota
+    # Dodaj odpowiedź bota i odblokuj pole wpisywania
     st.session_state.messages.append({"sender": "bot", "content": data["bot_response"]})
+    st.session_state.pending_message = None
 
     # Błędy
     st.session_state.last_errors = data.get("errors_details", [])
@@ -376,7 +415,7 @@ def _handle_send(content: str):
     stats["wpm"] = data["wpm"]
     stats["unique_words_count"] = data["unique_words_count"]
     stats["total_errors"] += data["total_errors"]
-    stats["total_words"] += len(content.split())
+    stats["total_words"] += count_words(content)
     # Liczba zdań we wszystkich wiadomościach użytkownika – każda wiadomość liczona osobno,
     # bo wiadomość bez kropki na końcu to też zdanie
     stats["sentence_count"] = max(1, sum(

@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from schemas import MessageRequest, MessageResponse, ErrorDetail
 from llm_service import generate_bot_response
-from stats_service import calculate_wpm, update_unique_words
+from stats_service import calculate_wpm, update_unique_words, count_words
 from database import get_db, engine
 from models import Base, Session, Message, Report, User
 
@@ -193,7 +193,7 @@ async def get_session_stats(session_id: int, db: AsyncSession = Depends(get_db))
 @limiter.limit("10/minute")
 async def send_message(request: Request, msg_req: MessageRequest, db: AsyncSession = Depends(get_db)):
     current_time = time.time()
-    word_count = len(msg_req.content.split())
+    word_count = count_words(msg_req.content)
 
     # 1. Sprawdzenie, czy sesja istnieje
     session_result = await db.execute(select(Session).where(Session.session_id == msg_req.session_id))
@@ -230,20 +230,23 @@ async def send_message(request: Request, msg_req: MessageRequest, db: AsyncSessi
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    # 4. Wyliczenie WPM na podstawie ostatniej wiadomości użytkownika
-    last_user_msg_stmt = select(Message.timestamp).where(
+    # 4. Wyliczenie WPM: czas od poprzedniej odpowiedzi bota do wysłania wiadomości
+    last_bot_msg_stmt = select(Message.timestamp).where(
         Message.session_id == msg_req.session_id,
-        Message.sender == 'user'
+        Message.sender == 'bot'
     ).order_by(Message.timestamp.desc()).limit(1)
-    last_msg_result = await db.execute(last_user_msg_stmt)
+    last_msg_result = await db.execute(last_bot_msg_stmt)
     last_timestamp_dt = last_msg_result.scalar_one_or_none()
 
     last_timestamp = last_timestamp_dt.timestamp() if last_timestamp_dt else current_time - 10  # Zabezpieczenie pierwszej wiadomości
     wpm = calculate_wpm(word_count, last_timestamp, current_time)
 
-    # 5. Zapis logów konwersacji (Wiadomości) do bazy
-    new_user_msg = Message(session_id=msg_req.session_id, sender='user', content=msg_req.content, word_count=word_count)
-    new_bot_msg = Message(session_id=msg_req.session_id, sender='bot', content=llm_response.bot_response, word_count=len(llm_response.bot_response.split()))
+    # 5. Zapis logów konwersacji (Wiadomości) do bazy – wiadomość użytkownika z czasem wysłania
+    new_user_msg = Message(
+        session_id=msg_req.session_id, sender='user', content=msg_req.content, word_count=word_count,
+        timestamp=datetime.fromtimestamp(current_time, timezone.utc)
+    )
+    new_bot_msg = Message(session_id=msg_req.session_id, sender='bot', content=llm_response.bot_response, word_count=count_words(llm_response.bot_response))
 
     # 6. Zapis raportu błędu
     new_report = Report(
@@ -251,7 +254,7 @@ async def send_message(request: Request, msg_req: MessageRequest, db: AsyncSessi
         wpm=wpm,
         unique_words_count=len(db_unique_words),
         total_errors=len(llm_response.errors),
-        errors_details=[err.dict() for err in llm_response.errors]
+        errors_details=[err.model_dump() for err in llm_response.errors]
     )
 
     db.add_all([new_user_msg, new_bot_msg, new_report])
