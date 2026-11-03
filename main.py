@@ -179,8 +179,11 @@ async def send_message(request: Request, msg_req: MessageRequest, db: AsyncSessi
 
     history = [f"User: {m.content}" if m.sender == 'user' else f"Bot: {m.content}" for m in db_messages]
 
-    # 3. Pobranie wszystkich wiadomości z sesji, by policzyć unikalne słowa
-    all_msgs_stmt = select(Message.content).where(Message.session_id == msg_req.session_id)
+    # 3. Pobranie wszystkich wiadomości użytkownika z sesji, by policzyć jego unikalne słowa
+    all_msgs_stmt = select(Message.content).where(
+        Message.session_id == msg_req.session_id,
+        Message.sender == 'user'
+    )
     all_msgs_result = await db.execute(all_msgs_stmt)
     db_unique_words = set()
     for content in all_msgs_result.scalars():
