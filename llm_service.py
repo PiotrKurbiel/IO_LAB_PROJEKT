@@ -1,11 +1,14 @@
 import asyncio
 import json
+import os
 import google.generativeai as genai
+from dotenv import load_dotenv
 from schemas import LLMResponse
 
-# Wymaga ustawienia zmiennej środowiskowej GOOGLE_API_KEY
-genai.configure(api_key="TWÓJ_KLUCZ_API")
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Klucz API wczytywany z pliku .env (GOOGLE_API_KEY=...) lub ze zmiennej środowiskowej
+load_dotenv()
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+model = genai.GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
 async def generate_bot_response(user_content: str, history: list, lang: str, native_lang: str, level: str) -> LLMResponse:
     # Prompt Systemowy[cite: 1]

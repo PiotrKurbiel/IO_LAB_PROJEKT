@@ -5,7 +5,7 @@ from stats_service import calculate_error_percentage
 # ───────────────────────────────────────────
 # Konfiguracja
 # ───────────────────────────────────────────
-API_URL = "http://localhost:8000"
+API_URL = "http://127.0.0.1:8000"  # nie "localhost" – na Windowsie każde zapytanie traci ~2 s na próbę IPv6
 
 LANGUAGES = {"Polski": "PL", "Angielski": "EN", "Hiszpański": "ES"}
 LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]
@@ -76,7 +76,7 @@ def api_send_message(session_id: int, content: str, language: str, level: str, n
             "native_language": native_language
         }, timeout=35)
         return r
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.RequestException:  # też ReadTimeout, gdy LLM nie odpowie w 35 s
         return None
 
 # ───────────────────────────────────────────
