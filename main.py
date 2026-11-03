@@ -10,7 +10,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from typing import List, Optional
 
-from schemas import MessageRequest, MessageResponse
+from schemas import MessageRequest, MessageResponse, ErrorDetail
 from llm_service import generate_bot_response
 from stats_service import calculate_wpm, update_unique_words
 from database import get_db, engine
@@ -60,6 +60,12 @@ class MessageInfo(BaseModel):
     sender: str
     content: str
     timestamp: str
+
+class SessionStats(BaseModel):
+    wpm: float
+    unique_words_count: int
+    total_errors: int
+    last_errors: List[ErrorDetail]
 
 
 # ───────────────────────────────────────────
@@ -154,6 +160,29 @@ async def get_messages(session_id: int, db: AsyncSession = Depends(get_db)):
         )
         for m in messages
     ]
+
+
+# ───────────────────────────────────────────
+# Statystyki z konkretnej sesji
+# ───────────────────────────────────────────
+
+@app.get("/sessions/{session_id}/stats", response_model=SessionStats)
+async def get_session_stats(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Odtwarza statystyki sesji z zapisanych raportów (np. po wczytaniu starej rozmowy)."""
+    result = await db.execute(
+        select(Report).where(Report.session_id == session_id).order_by(Report.report_id.asc())
+    )
+    reports = result.scalars().all()
+    if not reports:
+        return SessionStats(wpm=0.0, unique_words_count=0, total_errors=0, last_errors=[])
+
+    last = reports[-1]
+    return SessionStats(
+        wpm=last.wpm,
+        unique_words_count=last.unique_words_count,
+        total_errors=sum(r.total_errors for r in reports),
+        last_errors=last.errors_details
+    )
 
 
 # ───────────────────────────────────────────

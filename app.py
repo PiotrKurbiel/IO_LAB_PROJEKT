@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from stats_service import calculate_error_percentage
+from stats_service import calculate_error_percentage, count_sentences
 
 # ───────────────────────────────────────────
 # Konfiguracja
@@ -54,6 +54,15 @@ def api_get_messages(session_id: int):
     except requests.exceptions.ConnectionError:
         pass
     return []
+
+def api_get_session_stats(session_id: int):
+    try:
+        r = requests.get(f"{API_URL}/sessions/{session_id}/stats", timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except requests.exceptions.ConnectionError:
+        pass
+    return None
 
 def api_reset_session(user_id: int, language: str, level: str):
     try:
@@ -301,24 +310,30 @@ def _load_session(session_id: int, language: str, level: str):
     """Wczytuje historię wiadomości z istniejącej sesji."""
     with st.spinner("Wczytywanie rozmowy…"):
         raw_msgs = api_get_messages(session_id)
+        saved = api_get_session_stats(session_id) or {
+            "wpm": 0.0, "unique_words_count": 0, "total_errors": 0, "last_errors": []
+        }
     st.session_state.session_id = session_id
     st.session_state.language_code = language
     st.session_state.level = level
     st.session_state.messages = [
         {"sender": m["sender"], "content": m["content"]} for m in raw_msgs
     ]
-    st.session_state.last_errors = []
+    # Odtworzenie statystyk z raportów zapisanych w bazie
+    user_msgs = [m["content"] for m in raw_msgs if m["sender"] == "user"]
+    st.session_state.last_errors = saved["last_errors"]
     st.session_state.stats = {
-        "wpm": 0.0, "unique_words_count": 0,
-        "total_errors": 0, "total_words": 0, "sentence_count": 0
+        "wpm": saved["wpm"],
+        "unique_words_count": saved["unique_words_count"],
+        "total_errors": saved["total_errors"],
+        "total_words": sum(len(m.split()) for m in user_msgs),
+        "sentence_count": sum(count_sentences(m) for m in user_msgs),
     }
     st.rerun()
 
 
 def _handle_send(content: str):
     """Wysyła wiadomość do backendu i aktualizuje stan."""
-    import re
-
     # Optymistyczne dodanie wiadomości użytkownika do czatu
     st.session_state.messages.append({"sender": "user", "content": content})
 
@@ -362,11 +377,11 @@ def _handle_send(content: str):
     stats["unique_words_count"] = data["unique_words_count"]
     stats["total_errors"] += data["total_errors"]
     stats["total_words"] += len(content.split())
-    # Liczba zdań z całości wiadomości użytkownika
-    all_user_text = " ".join(
-        m["content"] for m in st.session_state.messages if m["sender"] == "user"
-    )
-    stats["sentence_count"] = max(1, len(re.split(r'[.!?]+', all_user_text)) - 1)
+    # Liczba zdań we wszystkich wiadomościach użytkownika – każda wiadomość liczona osobno,
+    # bo wiadomość bez kropki na końcu to też zdanie
+    stats["sentence_count"] = max(1, sum(
+        count_sentences(m["content"]) for m in st.session_state.messages if m["sender"] == "user"
+    ))
 
     st.rerun()
 

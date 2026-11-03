@@ -12,7 +12,11 @@ def update_unique_words(current_text: str, existing_unique_words: set) -> set:
     words = set(re.findall(r'\b\w+\b', current_text.lower()))
     return existing_unique_words.union(words)
 
+def count_sentences(text: str) -> int:
+    """Liczy zdania – fragment bez kropki, ! lub ? na końcu też jest zdaniem."""
+    return len([s for s in re.split(r'[.!?]+', text) if s.strip()])
+
 def calculate_error_percentage(total_errors: int, user_text: str) -> float:
     """Oblicza % błędów na zdanie."""
-    sentences = max(1, len(re.split(r'[.!?]+', user_text)) - 1)
+    sentences = max(1, count_sentences(user_text))
     return round((total_errors / sentences) * 100, 2)
