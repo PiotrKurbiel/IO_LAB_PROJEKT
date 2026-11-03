@@ -1,3 +1,5 @@
+import hashlib
+import os
 from sqlalchemy import Column, Integer, String, Text, Float, ForeignKey, DateTime
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.dialects.postgresql import JSONB
@@ -19,6 +21,20 @@ class User(Base):
     # Relacja do tabeli Sesje
     sessions = relationship("Session", back_populates="user")
 
+    def set_password(self, password: str):
+        """Haszuje hasło metodą SHA-256 z losową solą (salt:hash)."""
+        salt = os.urandom(16).hex()
+        hashed = hashlib.sha256((salt + password).encode()).hexdigest()
+        self.password_hash = f"{salt}:{hashed}"
+
+    def verify_password(self, password: str) -> bool:
+        """Weryfikuje hasło względem zapisanego hasha."""
+        try:
+            salt, hashed = self.password_hash.split(":", 1)
+            return hashlib.sha256((salt + password).encode()).hexdigest() == hashed
+        except Exception:
+            return False
+
 class Session(Base):
     __tablename__ = 'sessions'
 
@@ -38,7 +54,7 @@ class Message(Base):
     msg_id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey('sessions.session_id'), nullable=False)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    sender = Column(String, nullable=False) # 'user' lub 'bot'
+    sender = Column(String, nullable=False)  # 'user' lub 'bot'
     content = Column(Text, nullable=False)
     word_count = Column(Integer, nullable=False)
 
