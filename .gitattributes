@@ -1,0 +1,2 @@
+# Pliki .bat muszą mieć windowsowe końce linii, inaczej skoki (goto) potrafią nie działać
+*.bat text eol=crlf
