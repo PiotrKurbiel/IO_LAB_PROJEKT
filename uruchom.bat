@@ -16,7 +16,18 @@ if errorlevel 1 (
     echo.
 )
 
-echo [1/4] Docker...
+echo [1/3] Baza danych...
+rem Własny PostgreSQL na komputerze -> pyta o hasło i łączy się z nim; brak bazy -> stawia ją w Dockerze
+".venv\Scripts\python.exe" -W ignore db_setup.py
+if errorlevel 10 goto docker
+if errorlevel 1 (
+    pause
+    exit /b 1
+)
+goto baza_ok
+
+:docker
+echo Brak bazy na komputerze - stawiam ją w Dockerze...
 docker info >nul 2>&1
 if not errorlevel 1 goto docker_ok
 echo Docker Desktop nie działa - uruchamiam go (to może potrwać do minuty)...
@@ -33,7 +44,6 @@ pause
 exit /b 1
 :docker_ok
 
-echo [2/4] Baza danych...
 docker start projekt_lab_db >nul 2>&1
 if not errorlevel 1 goto baza_start
 echo Brak kontenera - tworzę bazę projekt_lab...
@@ -58,11 +68,11 @@ pause
 exit /b 1
 :baza_ok
 
-echo [3/4] Backend i frontend - otwierają się w osobnych oknach, nie zamykaj ich podczas pracy...
+echo [2/3] Backend i frontend - otwierają się w osobnych oknach, nie zamykaj ich podczas pracy...
 start "LangChat - backend" cmd /k ".venv\Scripts\uvicorn.exe main:app --port 8000"
 start "LangChat - frontend" cmd /k ".venv\Scripts\streamlit.exe run app.py --server.port 8501 --server.headless true"
 
-echo [4/4] Czekam, aż aplikacja wstanie...
+echo [3/3] Czekam, aż aplikacja wstanie...
 set /a proby=0
 :czekaj_app
 ping -n 2 127.0.0.1 >nul

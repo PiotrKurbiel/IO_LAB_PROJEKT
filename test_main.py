@@ -7,6 +7,8 @@ from sqlalchemy.pool import StaticPool
 
 from stats_service import calculate_wpm, calculate_error_percentage, count_sentences, count_words, update_unique_words
 from llm_service import parse_llm_response, generate_bot_response
+from db_setup import build_database_url
+from sqlalchemy.engine import make_url
 from schemas import LLMResponse, ErrorDetail
 from models import Base
 from database import get_db
@@ -45,6 +47,13 @@ def test_unique_words():
     # Kolejna wiadomość dokłada tylko nowe słowa
     words = update_unique_words("Cats are cute", words)
     assert len(words) == 6
+
+def test_own_database_url():
+    # Hasło do własnego PostgreSQL ze znakami specjalnymi nie może zepsuć adresu bazy
+    url = build_database_url("postgres", "p@ss:w/rd%#!")
+    parsed = make_url(url)
+    assert parsed.password == "p@ss:w/rd%#!"
+    assert (parsed.host, parsed.port, parsed.database) == ("localhost", 5432, "projekt_lab")
 
 # ───────────────────────────────────────────
 # Testy jednostkowe – odczyt odpowiedzi JSON z LLM
